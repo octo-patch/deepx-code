@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -190,4 +191,42 @@ func resolveFileMentions(text, workspace string) string {
 		}
 		return "`" + rel + "`"
 	})
+}
+
+// videoMentionExtRe matches the video container extensions that can be attached.
+// Kept in step with the agent-side list: extensions the send path knows how to inline.
+var videoMentionExtRe = regexp.MustCompile(`(?i)\.(?:mp4|mov|webm|mkv|m4v|avi)$`)
+
+// extractVideoMentions turns every "@path" that resolves to an existing video file into a
+// [Video #N] placeholder and returns the collected absolute paths, in placeholder order.
+//
+// Why not leave it to resolveFileMentions: that one hands the model a path to Read, and
+// no tool can read a clip — the model would either guess or give up. A video has to be
+// handed over as content, so it takes the same route a pasted screenshot takes
+// ([Image #N] + ImagePaths), just with VideoPaths.
+//
+// Mentions that do not exist, are directories, or are not videos are left untouched for
+// resolveFileMentions to deal with.
+func extractVideoMentions(text, workspace string) (string, []string) {
+	var paths []string
+	out := fileMentionRe.ReplaceAllStringFunc(text, func(match string) string {
+		rel := strings.TrimPrefix(match, "@")
+		if !videoMentionExtRe.MatchString(rel) {
+			return match
+		}
+		abs := rel
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workspace, rel)
+		}
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() {
+			return match
+		}
+		paths = append(paths, abs)
+		return fmt.Sprintf("[Video #%d]", len(paths))
+	})
+	if len(paths) == 0 {
+		return text, nil
+	}
+	return out, paths
 }

@@ -108,6 +108,7 @@ func CutHistory(history []ChatMessage, cutIdx int) []ChatMessage {
 			}
 			task := history[i]
 			task.ImagePaths = nil // 图不复制(见上)
+			task.VideoPaths = nil // Same for videos, only more so: a clip costs far more tokens.
 			task.ContentParts = nil
 			out = append(out, task)
 			break

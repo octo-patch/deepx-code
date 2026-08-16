@@ -37,6 +37,12 @@ type ModelEntry struct {
 	// Vision 不是配置项(yaml:"-" 不读不写),只为和 agent.ModelEntry 保持整体可互转。
 	// 模型是否支持视觉由运行时探测决定(见 tui 视觉探测),不进 model.yaml。
 	Vision bool `yaml:"-"`
+	// VideoInput declares that this model accepts video input, so attached videos are
+	// sent as video_url content parts instead of being reduced to a file path. Unlike
+	// Vision this one *is* a config option: probing it would mean uploading a clip on
+	// every start. Left unset it stays false, which is the safe default for every
+	// text-only endpoint.
+	VideoInput bool `yaml:"video_input,omitempty"`
 }
 
 // Config 整份 model.yaml 的反序列化目标。

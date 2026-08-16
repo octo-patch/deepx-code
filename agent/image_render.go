@@ -32,6 +32,9 @@ const (
 //
 // 入口路由和中途 SwitchModel 都走这里 —— 同一条带图消息,发给视觉模型是 base64、发给非视觉模型
 // 是路径+OCR,所以模型中途从视觉切到非视觉也不会因带着 base64 被 4xx 拒掉。
+//
+// This is the image stage of renderConvoMedia; the video stage runs right after it
+// (see renderConvoVideos), so every returned message keeps its VideoPaths.
 func renderConvoImages(convo []ChatMessage, vision bool) []ChatMessage {
 	out := make([]ChatMessage, len(convo))
 	for i, m := range convo {
@@ -79,6 +82,8 @@ func stripImageParts(m ChatMessage) ChatMessage {
 		ToolCalls:        m.ToolCalls,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
+		// Carried through: the video pass runs after this one and needs the paths.
+		VideoPaths: m.VideoPaths,
 	}
 }
 
@@ -130,12 +135,12 @@ func renderImageVision(m ChatMessage) ChatMessage {
 		}
 	}
 	if !hasImg {
-		return ChatMessage{Role: m.Role, Content: m.Content}
+		return ChatMessage{Role: m.Role, Content: m.Content, VideoPaths: m.VideoPaths}
 	}
 
 	// 提醒压在最后
 	parts = append(parts, ContentPart{Type: "text", Text: visionReminder})
-	return ChatMessage{Role: m.Role, ContentParts: parts}
+	return ChatMessage{Role: m.Role, ContentParts: parts, VideoPaths: m.VideoPaths}
 }
 
 // imagePartFromPath 读图编 base64,返回一个 image_url part;读不到(被清理/路径失效)返回 nil。
@@ -168,7 +173,7 @@ func renderImageOCR(m ChatMessage) ChatMessage {
 	} else {
 		replaced = nonVisionReminder
 	}
-	return ChatMessage{Role: m.Role, Content: replaced}
+	return ChatMessage{Role: m.Role, Content: replaced, VideoPaths: m.VideoPaths}
 }
 
 // ocrTargetsInlinedImage 判断(对视觉模型而言)这次 OCR 调用是不是在"绕路 OCR 它本可直接看的图"。

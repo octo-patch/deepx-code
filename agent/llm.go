@@ -73,6 +73,12 @@ type ModelEntry struct {
 	// Vision 表示该模型是否支持图片输入(由启动探测的缓存填入,见 tui)。决定带图消息发请求时
 	// 渲染成 base64 image_url(true)还是路径文本走 OCR(false)。
 	Vision bool
+	// VideoInput reports whether the model accepts video input. Unlike Vision it is
+	// declared in model.yaml (`video_input`) instead of probed: a probe would have to
+	// upload a whole clip just to ask the question. Same send-time effect as Vision —
+	// true renders attached videos as base64 video_url parts, false keeps the file path
+	// as text so a text-only endpoint is never handed a video part.
+	VideoInput bool
 }
 
 // ModelConfig 双模型配置。Flash 处理简单/查询型任务,Pro 处理复杂/规划型任务。
@@ -213,6 +219,13 @@ type ChatMessage struct {
 	// (历史小、缓存友好)。发请求前由 renderConvoImages 按"当轮模型支不支持视觉"即时渲染:
 	// 支持 → 读成 base64 image_url;不支持 → 路径替回文本走 OCR。gob 持久化(导出字段)。
 	ImagePaths []string `json:"-"`
+	// VideoPaths holds the absolute paths of the videos attached to this message.
+	// Same canonical form as ImagePaths — paths only, never base64: a clip is orders of
+	// magnitude larger than a screenshot, so keeping it out of the stored history is what
+	// makes the history small and the prefix cache stable. renderConvoMedia turns the
+	// paths into video_url parts at send time when the model accepts video input, and
+	// leaves them as plain text otherwise. gob-persisted (exported field).
+	VideoPaths []string `json:"-"`
 	// WorkingMode 记录这条 user 消息**提交当轮所处的工作模式**(只对 user 消息有意义)。
 	// 钉死不变:发请求前由 renderWorkingMode 按**每条消息自己的** mode 确定性渲染后缀,
 	// 切换当前模式不会改写历史消息的后缀 → 历史逐字节稳定、前缀缓存不 miss。空值兜底为默认 kp。
@@ -221,14 +234,23 @@ type ChatMessage struct {
 }
 
 // ContentPart 是 OpenAI 多模态消息里 content 数组的一个元素。
-// Type 取值: "text" | "image_url"。
+// Type 取值: "text" | "image_url" | "video_url"。
 type ContentPart struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	// VideoURL carries a video part. Only ever set for models that declare video input;
+	// omitempty keeps the key out of every other request body.
+	VideoURL *VideoURL `json:"video_url,omitempty"`
 }
 
 type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// VideoURL is the payload of a "video_url" content part. Same shape as ImageURL, which
+// is what OpenAI-compatible endpoints expect for video parts.
+type VideoURL struct {
 	URL string `json:"url"`
 }
 
@@ -772,10 +794,11 @@ func StartStream(
 				}
 			}
 			// 按本轮模型支不支持视觉,即时把带图消息渲染成 base64 或 路径+OCR(见 renderConvoImages)。
+			// 视频同理:支持 video_url 就内联,不支持只留路径文本(见 renderConvoMedia)。
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
 			// 渲染后的副本才是真正发出的输入 —— max_tokens 夹取按它估算(渲染会追加 OCR 文本等,
 			// 比规范 convo 大;按规范估会低估输入、夹不住,仍可能爆窗)。
-			rendered := renderConvoImages(renderWorkingMode(convo, workingMode), currentEntry.Vision)
+			rendered := renderConvoMedia(renderWorkingMode(convo, workingMode), currentEntry.Vision, currentEntry.VideoInput)
 			// 输入把输出预算挤没了:再发也只能吐几个 token 就停,表现为"一执行就自己停下来、
 			// 工具怎么调都失败"。这是压缩没能把上下文降下来的下游症状,而夹取本身是静默的 ——
 			// 出声一次,把症状和真因接上,别让用户对着"莫名其妙停住"干瞪眼(issue #232)。
@@ -797,7 +820,22 @@ func StartStream(
 			if err != nil && isImageInputUnsupported(err) {
 				currentEntry.Vision = false
 				ch <- VisionUnsupportedMsg{Model: currentEntry.Model, BaseURL: currentEntry.BaseURL}
-				rendered := renderConvoImages(renderWorkingMode(convo, workingMode), false)
+				rendered := renderConvoMedia(renderWorkingMode(convo, workingMode), false, currentEntry.VideoInput)
+				assistantContent, reasoning, toolCalls, finishReason, usage, err = streamOnce(
+					ctx,
+					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
+					rendered, clampMaxTokens(currentEntry.MaxTokens, currentEntry.ContextWindow, rendered), toolSpecs,
+					currentEntry.ReasoningEffort, currentEntry.Thinking,
+					ch,
+				)
+			}
+			// Same self-heal for video: video_input is declared in model.yaml, so a wrong
+			// value is the user's typo rather than a bad probe. Drop video for the rest of
+			// the session and resend with the paths as text instead of failing the turn.
+			// No cache to correct (nothing probes video), so nothing to tell the TUI.
+			if err != nil && isVideoInputUnsupported(err) {
+				currentEntry.VideoInput = false
+				rendered := renderConvoMedia(renderWorkingMode(convo, workingMode), currentEntry.Vision, false)
 				assistantContent, reasoning, toolCalls, finishReason, usage, err = streamOnce(
 					ctx,
 					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
