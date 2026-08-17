@@ -37,6 +37,12 @@ type ModelEntry struct {
 	// Vision 不是配置项(yaml:"-" 不读不写),只为和 agent.ModelEntry 保持整体可互转。
 	// 模型是否支持视觉由运行时探测决定(见 tui 视觉探测),不进 model.yaml。
 	Vision bool `yaml:"-"`
+	// Video reports whether the endpoint accepts video input. Unlike Vision there is no runtime
+	// probe for it (a probe would have to upload a real video every time), so it is a real
+	// config item: Load derives it from the model id for the models that are known to take
+	// video, and `video: true` in model.yaml turns it on for any other OpenAI-compatible
+	// endpoint. Field order must stay aligned with agent.ModelEntry.
+	Video bool `yaml:"video,omitempty"`
 }
 
 // Config 整份 model.yaml 的反序列化目标。
@@ -184,6 +190,27 @@ func defaultMaxTokens(model string) int {
 	return 131072
 }
 
+// videoInputModels lists the model ids whose input modalities include video, matched as a
+// lowercase substring of the configured model id. Keep it to models that really accept a
+// video_url content part — a model listed here by mistake gets the whole request rejected.
+var videoInputModels = []string{"minimax-m3"}
+
+// defaultVideoInput reports whether the model id is known to accept video input. Same shape as
+// defaultContextWindow / defaultMaxTokens: infer from the model id so an existing model.yaml
+// gains the capability without being rewritten. `video: true` in the yaml wins regardless.
+func defaultVideoInput(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return false
+	}
+	for _, v := range videoInputModels {
+		if strings.Contains(m, v) {
+			return true
+		}
+	}
+	return false
+}
+
 // Load 从 ~/.deepx/model.yaml 读配置。文件缺失或解析失败返回 err。
 func Load() (*Config, error) {
 	p, err := Path()
@@ -209,6 +236,12 @@ func Load() (*Config, error) {
 	}
 	if c.Pro.MaxTokens <= 0 {
 		c.Pro.MaxTokens = defaultMaxTokens(c.Pro.Model)
+	}
+	if !c.Flash.Video {
+		c.Flash.Video = defaultVideoInput(c.Flash.Model)
+	}
+	if !c.Pro.Video {
+		c.Pro.Video = defaultVideoInput(c.Pro.Model)
 	}
 	return &c, nil
 }

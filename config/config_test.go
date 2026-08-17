@@ -43,3 +43,62 @@ func TestDefaultMaxTokens(t *testing.T) {
 		t.Errorf("mimo max_tokens = %d, want 131072", got)
 	}
 }
+
+// defaultVideoInput only reports true for the model ids that really accept a video_url part;
+// everything else stays text/image only so no request grows an attachment the endpoint rejects.
+func TestDefaultVideoInput(t *testing.T) {
+	for _, model := range []string{"MiniMax-M3", "minimax-m3"} {
+		if !defaultVideoInput(model) {
+			t.Errorf("defaultVideoInput(%q) = false, want true", model)
+		}
+	}
+	for _, model := range []string{"", "MiniMax-M2.7", "deepseek-v4-pro", "mimo-v2.5"} {
+		if defaultVideoInput(model) {
+			t.Errorf("defaultVideoInput(%q) = true, want false", model)
+		}
+	}
+}
+
+// Load derives Video from the model id, so an existing model.yaml gains video input without
+// being rewritten; an explicit `video: true` keeps working for any other endpoint.
+func TestLoadDerivesVideoInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	if err := Save(&Config{
+		Flash: ModelEntry{BaseURL: "https://example.invalid/v1", Model: "MiniMax-M2.7", APIKey: "k"},
+		Pro:   ModelEntry{BaseURL: "https://example.invalid/v1", Model: "MiniMax-M3", APIKey: "k"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flash.Video {
+		t.Error("flash Video = true, want false for a text-only model")
+	}
+	if !cfg.Pro.Video {
+		t.Error("pro Video = false, want true for a video-capable model")
+	}
+}
+
+func TestLoadKeepsExplicitVideoInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	if err := Save(&Config{
+		Flash: ModelEntry{BaseURL: "https://example.invalid/v1", Model: "some-local-model", APIKey: "k", Video: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Flash.Video {
+		t.Error("flash Video = false, want the explicit yaml value to survive a round trip")
+	}
+}

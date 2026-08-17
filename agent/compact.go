@@ -108,6 +108,7 @@ func CutHistory(history []ChatMessage, cutIdx int) []ChatMessage {
 			}
 			task := history[i]
 			task.ImagePaths = nil // 图不复制(见上)
+			task.VideoPaths = nil // videos are not copied either (same reason as above)
 			task.ContentParts = nil
 			out = append(out, task)
 			break

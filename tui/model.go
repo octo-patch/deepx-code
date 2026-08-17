@@ -3315,18 +3315,26 @@ func webURLExposed(raw string) bool {
 }
 
 func (m model) buildUserMessage(text string) agent.ChatMessage {
+	var videoPaths []string
 	if wd, err := os.Getwd(); err == nil {
+		// Video mentions are pulled out first: resolveFileMentions would otherwise turn
+		// "@clip.mp4" into a backquoted path for the Read tool, which cannot do anything with a
+		// video. extractVideoMentions leaves a [Video #N] placeholder + an attachment instead,
+		// so the video follows the same canonical route as a pasted image — paths in the
+		// history, base64 video_url parts only at request time (see agent.renderConvoVideos).
+		text, videoPaths = extractVideoMentions(text, wd)
 		text = resolveFileMentions(text, wd)
 	}
 	// 钉上提交当轮的工作模式:发送时按这个标签渲染后缀,切模式不改写历史 → 前缀缓存稳定。
 	// gob 持久化,重启后原样恢复(见 ChatMessage.WorkingMode / renderWorkingMode)。
-	if len(m.attachedImagePaths) == 0 {
+	if len(m.attachedImagePaths) == 0 && len(videoPaths) == 0 {
 		return agent.ChatMessage{Role: "user", Content: text, WorkingMode: m.workingMode}
 	}
 	return agent.ChatMessage{
 		Role:        "user",
 		Content:     text,
 		ImagePaths:  append([]string(nil), m.attachedImagePaths...),
+		VideoPaths:  videoPaths,
 		WorkingMode: m.workingMode,
 	}
 }

@@ -73,6 +73,12 @@ type ModelEntry struct {
 	// Vision 表示该模型是否支持图片输入(由启动探测的缓存填入,见 tui)。决定带图消息发请求时
 	// 渲染成 base64 image_url(true)还是路径文本走 OCR(false)。
 	Vision bool
+	// Video reports whether the model accepts video input. It decides how a message carrying
+	// videos is sent: base64 video_url parts (true) or the plain file paths left in the text
+	// (false). Unlike Vision there is no runtime probe for it, so it is declared through
+	// model.yaml / derived from the model id (see config.ModelEntry.Video).
+	// Field order must stay aligned with config.ModelEntry (whole-struct conversion).
+	Video bool
 }
 
 // ModelConfig 双模型配置。Flash 处理简单/查询型任务,Pro 处理复杂/规划型任务。
@@ -213,6 +219,12 @@ type ChatMessage struct {
 	// (历史小、缓存友好)。发请求前由 renderConvoImages 按"当轮模型支不支持视觉"即时渲染:
 	// 支持 → 读成 base64 image_url;不支持 → 路径替回文本走 OCR。gob 持久化(导出字段)。
 	ImagePaths []string `json:"-"`
+	// VideoPaths holds the absolute paths of the videos attached to this message. Same
+	// canonical form as ImagePaths: the history stores paths only (small, cache friendly)
+	// and renderConvoVideos turns them into base64 video_url parts at request time when the
+	// current model accepts video input; otherwise the placeholders degrade back to paths.
+	// gob persisted (exported field).
+	VideoPaths []string `json:"-"`
 	// WorkingMode 记录这条 user 消息**提交当轮所处的工作模式**(只对 user 消息有意义)。
 	// 钉死不变:发请求前由 renderWorkingMode 按**每条消息自己的** mode 确定性渲染后缀,
 	// 切换当前模式不会改写历史消息的后缀 → 历史逐字节稳定、前缀缓存不 miss。空值兜底为默认 kp。
@@ -221,14 +233,24 @@ type ChatMessage struct {
 }
 
 // ContentPart 是 OpenAI 多模态消息里 content 数组的一个元素。
-// Type 取值: "text" | "image_url"。
+// Type 取值: "text" | "image_url" | "video_url"。
 type ContentPart struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	// VideoURL carries a video input part; only set when Type is "video_url". omitempty keeps
+	// the key out of the request body for text / image parts, so endpoints that do not know
+	// video_url never see an extra field.
+	VideoURL *VideoURL `json:"video_url,omitempty"`
 }
 
 type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// VideoURL is the payload of a "video_url" content part. Same shape as ImageURL — a base64
+// data URL or a remote URL — so OpenAI-compatible endpoints accept it unchanged.
+type VideoURL struct {
 	URL string `json:"url"`
 }
 
@@ -775,7 +797,7 @@ func StartStream(
 			// 只渲染发出去的副本,convo 规范形态(只存路径)不变。
 			// 渲染后的副本才是真正发出的输入 —— max_tokens 夹取按它估算(渲染会追加 OCR 文本等,
 			// 比规范 convo 大;按规范估会低估输入、夹不住,仍可能爆窗)。
-			rendered := renderConvoImages(renderWorkingMode(convo, workingMode), currentEntry.Vision)
+			rendered := renderConvoVideos(renderConvoImages(renderWorkingMode(convo, workingMode), currentEntry.Vision), currentEntry.Video)
 			// 输入把输出预算挤没了:再发也只能吐几个 token 就停,表现为"一执行就自己停下来、
 			// 工具怎么调都失败"。这是压缩没能把上下文降下来的下游症状,而夹取本身是静默的 ——
 			// 出声一次,把症状和真因接上,别让用户对着"莫名其妙停住"干瞪眼(issue #232)。
@@ -797,7 +819,7 @@ func StartStream(
 			if err != nil && isImageInputUnsupported(err) {
 				currentEntry.Vision = false
 				ch <- VisionUnsupportedMsg{Model: currentEntry.Model, BaseURL: currentEntry.BaseURL}
-				rendered := renderConvoImages(renderWorkingMode(convo, workingMode), false)
+				rendered := renderConvoVideos(renderConvoImages(renderWorkingMode(convo, workingMode), false), currentEntry.Video)
 				assistantContent, reasoning, toolCalls, finishReason, usage, err = streamOnce(
 					ctx,
 					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
