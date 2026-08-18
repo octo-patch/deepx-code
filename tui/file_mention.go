@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -174,6 +175,59 @@ func renderFileMentionPalette(matches []string, selIdx, width int) string {
 
 // fileMentionRe 匹配 "@路径" token(路径含字母数字及 / . - _ ~)。
 var fileMentionRe = regexp.MustCompile(`@([A-Za-z0-9_./~\-]+)`)
+
+// videoMentionExtRe matches the extension of a video container that can be attached as a
+// multimodal input (checked on the "@提及" token, case insensitive).
+var videoMentionExtRe = regexp.MustCompile(`(?i)\.(?:mp4|webm|mov|mkv|avi)$`)
+
+// extractVideoMentions rewrites every "@path" mention that points to an existing local video file
+// into a [Video #N] placeholder and returns the absolute paths of those videos, ordered by
+// placeholder number.
+//
+// A video cannot be handed to the Read tool the way a normal file is (it is binary) and it has no
+// local fallback the way an image has OCR, so it follows the attachment pattern of images: only the
+// path is recorded at submit time and the agent renders it into a base64 video_url part — or back
+// into plain path text — at request time, depending on whether the model of that turn accepts video
+// input (see agent.ChatMessage.VideoPaths).
+//
+// This reuses the "@" file picker on purpose: picking a video is the same gesture as picking any
+// other workspace file, so no extra key binding or modal is needed.
+//
+// The same path mentioned several times is attached once and reuses its placeholder number, so a
+// clip is never uploaded twice. Mentions of a missing path, of a directory or of a non video
+// extension are left untouched for resolveFileMentions to handle by the existing rules.
+func extractVideoMentions(text, workspace string) (string, []string) {
+	var paths []string
+	idxByPath := map[string]int{}
+	out := fileMentionRe.ReplaceAllStringFunc(text, func(match string) string {
+		rel := strings.TrimPrefix(match, "@")
+		if !videoMentionExtRe.MatchString(rel) {
+			return match
+		}
+		abs := rel
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workspace, rel)
+		}
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() {
+			return match
+		}
+		n, ok := idxByPath[abs]
+		if !ok {
+			paths = append(paths, abs)
+			n = len(paths)
+			idxByPath[abs] = n
+		}
+		return formatVideoPlaceholder(n)
+	})
+	return out, paths
+}
+
+// formatVideoPlaceholder builds the placeholder of the nth attached video. The shape matches the
+// [Image #N] placeholder of images and is parsed by the agent side (see its videoPlaceholderRe).
+func formatVideoPlaceholder(n int) string {
+	return "[Video #" + strconv.Itoa(n) + "]"
+}
 
 // resolveFileMentions 把文本里指向真实存在路径(文件或目录)的 "@相对路径" 替换成反引号包裹的
 // 相对路径,让模型识别为引用并按需调 Read(文件)/ List(目录)。指向不存在路径的 @token

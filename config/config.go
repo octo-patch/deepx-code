@@ -37,6 +37,10 @@ type ModelEntry struct {
 	// Vision 不是配置项(yaml:"-" 不读不写),只为和 agent.ModelEntry 保持整体可互转。
 	// 模型是否支持视觉由运行时探测决定(见 tui 视觉探测),不进 model.yaml。
 	Vision bool `yaml:"-"`
+	// Video is not a config entry either (yaml:"-"). Unlike Vision it is not probed at runtime —
+	// probing would mean uploading a real clip — but derived from the model id, see
+	// SupportsVideoInput. Field order must stay in sync with agent.ModelEntry.
+	Video bool `yaml:"-"`
 }
 
 // Config 整份 model.yaml 的反序列化目标。
@@ -112,6 +116,25 @@ var modelConfig = map[string]modelT{
 		MaxTokens:     0, // 0 = 不发 max_tokens,走模型默认输出上限
 		ContextWindow: 1_048_576, // 1M
 	},
+}
+
+// videoInputModels are the model ids whose input modalities include video on top of text and
+// image. Keys are lowercased because the id can also be typed by hand into model.yaml; the
+// canonical spelling of the entry below is "MiniMax-M3".
+//
+// Video input capability belongs to the model, not to the endpoint, so it is keyed by model id and
+// not by base_url. Unlike Vision it is declared here instead of probed at runtime: probing would
+// mean uploading a real clip on every start, which is far too expensive for a capability bit.
+// Models that are not listed keep the existing text/image only behaviour.
+var videoInputModels = map[string]bool{
+	"minimax-m3": true,
+}
+
+// SupportsVideoInput reports whether the given model id accepts video input. The agent uses it to
+// decide whether a message carrying attached videos is sent as video_url content parts or degraded
+// to plain path text (see agent.ModelEntry.Video). Matching ignores case and surrounding blanks.
+func SupportsVideoInput(model string) bool {
+	return videoInputModels[strings.ToLower(strings.TrimSpace(model))]
 }
 
 // Path 返回 ~/.deepx/model.yaml 绝对路径。

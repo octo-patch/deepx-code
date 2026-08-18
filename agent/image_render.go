@@ -79,6 +79,8 @@ func stripImageParts(m ChatMessage) ChatMessage {
 		ToolCalls:        m.ToolCalls,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
+		// Video attachments are consumed by the later renderConvoVideos pass, so carry them over.
+		VideoPaths: m.VideoPaths,
 	}
 }
 
@@ -130,12 +132,12 @@ func renderImageVision(m ChatMessage) ChatMessage {
 		}
 	}
 	if !hasImg {
-		return ChatMessage{Role: m.Role, Content: m.Content}
+		return ChatMessage{Role: m.Role, Content: m.Content, VideoPaths: m.VideoPaths}
 	}
 
 	// 提醒压在最后
 	parts = append(parts, ContentPart{Type: "text", Text: visionReminder})
-	return ChatMessage{Role: m.Role, ContentParts: parts}
+	return ChatMessage{Role: m.Role, ContentParts: parts, VideoPaths: m.VideoPaths}
 }
 
 // imagePartFromPath 读图编 base64,返回一个 image_url part;读不到(被清理/路径失效)返回 nil。
@@ -168,7 +170,7 @@ func renderImageOCR(m ChatMessage) ChatMessage {
 	} else {
 		replaced = nonVisionReminder
 	}
-	return ChatMessage{Role: m.Role, Content: replaced}
+	return ChatMessage{Role: m.Role, Content: replaced, VideoPaths: m.VideoPaths}
 }
 
 // ocrTargetsInlinedImage 判断(对视觉模型而言)这次 OCR 调用是不是在"绕路 OCR 它本可直接看的图"。

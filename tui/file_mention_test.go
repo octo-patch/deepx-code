@@ -120,3 +120,62 @@ func TestListWorkspaceFiles(t *testing.T) {
 		}
 	}
 }
+
+// extractVideoMentions turns a mention of an existing local video into a [Video #N] attachment and
+// leaves every other mention for resolveFileMentions.
+func TestExtractVideoMentions(t *testing.T) {
+	ws := t.TempDir()
+	clip := filepath.Join(ws, "demo.mp4")
+	if err := os.WriteFile(clip, []byte("fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(ws, "main.go")
+	if err := os.WriteFile(code, []byte("package main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	text, paths := extractVideoMentions("watch @demo.mp4 and read @main.go", ws)
+	if want := "watch [Video #1] and read @main.go"; text != want {
+		t.Errorf("text = %q, want %q", text, want)
+	}
+	if !slices.Equal(paths, []string{clip}) {
+		t.Errorf("paths = %v, want %v", paths, []string{clip})
+	}
+
+	// The same clip mentioned twice is attached once and reuses its number.
+	text, paths = extractVideoMentions("@demo.mp4 vs @demo.mp4", ws)
+	if want := "[Video #1] vs [Video #1]"; text != want {
+		t.Errorf("text = %q, want %q", text, want)
+	}
+	if len(paths) != 1 {
+		t.Errorf("paths = %v, want a single attachment", paths)
+	}
+
+	// A missing file, a directory or a non video extension are left untouched.
+	for _, in := range []string{"@missing.mp4", "@" + filepath.Base(ws) + "/", "@main.go", "mail me@host"} {
+		text, paths = extractVideoMentions(in, ws)
+		if text != in || len(paths) != 0 {
+			t.Errorf("extractVideoMentions(%q) = %q / %v, want it untouched", in, text, paths)
+		}
+	}
+}
+
+// Numbering follows the order the placeholders appear in, which is what the agent side indexes by.
+func TestExtractVideoMentionsNumbering(t *testing.T) {
+	ws := t.TempDir()
+	var want []string
+	for _, name := range []string{"a.mp4", "b.webm"} {
+		p := filepath.Join(ws, name)
+		if err := os.WriteFile(p, []byte("fake"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, p)
+	}
+	text, paths := extractVideoMentions("compare @a.mp4 with @b.webm", ws)
+	if wantText := "compare [Video #1] with [Video #2]"; text != wantText {
+		t.Errorf("text = %q, want %q", text, wantText)
+	}
+	if !slices.Equal(paths, want) {
+		t.Errorf("paths = %v, want %v", paths, want)
+	}
+}

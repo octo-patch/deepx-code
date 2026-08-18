@@ -1228,6 +1228,9 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	models := m.models
 	models.Flash.Vision = m.visionByModel[modelCapKey(models.Flash)]
 	models.Pro.Vision = m.visionByModel[modelCapKey(models.Pro)]
+	// Video input is declared per model id (no runtime probe), see config.SupportsVideoInput.
+	models.Flash.Video = config.SupportsVideoInput(models.Flash.Model)
+	models.Pro.Video = config.SupportsVideoInput(models.Pro.Model)
 	cmd, ch := agent.StartStream(
 		ctx,
 		models,
@@ -3315,18 +3318,23 @@ func webURLExposed(raw string) bool {
 }
 
 func (m model) buildUserMessage(text string) agent.ChatMessage {
+	// Video mentions are pulled out first: they become [Video #N] attachments instead of the
+	// backticked path resolveFileMentions produces for readable files (see extractVideoMentions).
+	var videoPaths []string
 	if wd, err := os.Getwd(); err == nil {
+		text, videoPaths = extractVideoMentions(text, wd)
 		text = resolveFileMentions(text, wd)
 	}
 	// 钉上提交当轮的工作模式:发送时按这个标签渲染后缀,切模式不改写历史 → 前缀缓存稳定。
 	// gob 持久化,重启后原样恢复(见 ChatMessage.WorkingMode / renderWorkingMode)。
-	if len(m.attachedImagePaths) == 0 {
+	if len(m.attachedImagePaths) == 0 && len(videoPaths) == 0 {
 		return agent.ChatMessage{Role: "user", Content: text, WorkingMode: m.workingMode}
 	}
 	return agent.ChatMessage{
 		Role:        "user",
 		Content:     text,
 		ImagePaths:  append([]string(nil), m.attachedImagePaths...),
+		VideoPaths:  videoPaths,
 		WorkingMode: m.workingMode,
 	}
 }
@@ -4262,6 +4270,8 @@ func (m *model) startWorkflowTurn(rawInput, name string, args any) tea.Cmd {
 	models := m.models
 	models.Flash.Vision = m.visionByModel[modelCapKey(models.Flash)]
 	models.Pro.Vision = m.visionByModel[modelCapKey(models.Pro)]
+	models.Flash.Video = config.SupportsVideoInput(models.Flash.Model)
+	models.Pro.Video = config.SupportsVideoInput(models.Pro.Model)
 
 	cmd, ch := agent.StartWorkflow(ctx, models, m.history, m.mode, workspace, m.skillCatalog, script, args)
 	m.streamCh = ch
